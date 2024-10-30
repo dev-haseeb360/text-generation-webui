@@ -57,12 +57,13 @@ from modules.models import load_model, unload_model_if_idle, unload_model, reloa
 from modules.models_settings import (
     get_fallback_settings,
     get_model_metadata,
-    update_model_parameters
+    update_model_parameters,
+    save_model_settings
 )
 from modules.shared import do_cmd_flags_warnings, settings
 from modules.utils import gradio, transform_settings_to_state
 
-from fastapi import FastAPI, HTTPException, Query, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, Request, BackgroundTasks, APIRouter
 from modules import shared
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
@@ -72,6 +73,9 @@ from collections import OrderedDict
 from modules.loaders import loaders_and_params
 import gradio as gr
 import traceback
+from modules.github import clone_or_pull_repository
+from models import InputData, StatusResponse, DownloadRequest, ExtensionInput, HistoryItem, ModelInput
+
 
 def signal_handler(sig, frame):
     logger.info("Received Ctrl+C. Shutting down Text generation web UI gracefully.")
@@ -195,21 +199,9 @@ def create_interface():
         )
 
 
-class InputData(BaseModel):
-    message: str
-
-
-class StatusResponse(BaseModel):
-    message: str
-
-
-class DownloadRequest(BaseModel):
-    repo_id: str
-    specific_file: str
-
-
 app = FastAPI()
-
+model_router = APIRouter()
+chat_router = APIRouter()
 
 def background_download_model(repo_id: str, specific_file: str):
     try:
@@ -220,7 +212,7 @@ def background_download_model(repo_id: str, specific_file: str):
         print(error_message)
 
 
-@app.post("/api/v1/model/load")
+@model_router.post("/load")
 async def load_model_endpoint():
     try:
         model_name = utils.get_available_models()      
@@ -232,7 +224,7 @@ async def load_model_endpoint():
         raise HTTPException(status_code=500, detail=f"Error loading model: {str(e)}")
 
 
-@app.post("/api/v1/model/download")
+@model_router.post("/download")
 def download_model(data: DownloadRequest, background_tasks: BackgroundTasks):
     try:
         background_tasks.add_task(background_download_model, data.repo_id, data.specific_file)
@@ -243,7 +235,7 @@ def download_model(data: DownloadRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail="An error occurred while starting the model download.")
 
 
-@app.delete("/api/v1/model/unload", response_model=StatusResponse, status_code=200)
+@model_router.delete("/unload", response_model=StatusResponse, status_code=200)
 async def unload_model_endpoint():
     try:
         unload_model()
@@ -255,7 +247,7 @@ async def unload_model_endpoint():
         raise HTTPException(status_code=500, detail=f"Error on unloading the model: {str(e)}")
 
 
-@app.post("/api/v1/model/reload", response_model=StatusResponse, status_code=200)
+@model_router.post("/reload", response_model=StatusResponse, status_code=200)
 async def reload_model_endpoint():
     try:
         model_name = shared.model_name
@@ -269,7 +261,39 @@ async def reload_model_endpoint():
         raise HTTPException(status_code=500, detail=f"Error on reloading the model: {str(e)}")
 
 
-@app.post("/api/v1/chat/message")
+@model_router.post("/files")
+def get_model_files(request: DownloadRequest):
+    try:
+        messages = list(ui_model_menu.download_model_wrapper(request.repo_id, request.specific_file, return_links=True, check=False))
+        error_messages = [msg['error'] for msg in messages if isinstance(msg, dict) and 'error' in msg]
+
+        if error_messages:
+            return {"status": "error", "messages": error_messages}
+        
+        file_message = messages[1]
+        file_list = file_message.strip("```").splitlines()
+        
+        return {"status": "success", "messages": file_list}
+    except Exception as e:
+        error_message = f"Error: {str(e)}\n{traceback.format_exc()}"
+        print(error_message)
+        raise HTTPException(status_code=500, detail="An error occurred while fetching the file list.")
+
+
+@model_router.post("/save_setting")
+def save_settings(request: ModelInput):
+    try:
+        model_name = request.model_name
+        mode_input = request.dict(exclude={"model_name"})
+        message = save_model_settings(model_name, mode_input)
+        return {"status": "success", "messages": message}
+    except Exception as e:
+        error_message = f"Error: {str(e)}\n{traceback.format_exc()}"
+        print(error_message)
+        raise HTTPException(status_code=500, detail="An error occurred while fetching the file list.")
+
+
+@chat_router.post("/message")
 async def send_model_message(data: InputData):
     try:
         model_name = utils.get_available_models()
@@ -297,6 +321,10 @@ async def send_model_message(data: InputData):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in Response: {str(e)}")
+
+
+app.include_router(model_router, prefix="/api/v1/model", tags=["Model"])
+app.include_router(chat_router, prefix="/api/v1/chat", tags=["Chat"])
 
 
 def run_fastapi():
