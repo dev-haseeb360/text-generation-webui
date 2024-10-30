@@ -53,7 +53,7 @@ from modules import (
 )
 from modules.extensions import apply_extensions
 from modules.LoRA import add_lora_to_model
-from modules.models import load_model, unload_model_if_idle
+from modules.models import load_model, unload_model_if_idle, unload_model, reload_model
 from modules.models_settings import (
     get_fallback_settings,
     get_model_metadata,
@@ -62,11 +62,16 @@ from modules.models_settings import (
 from modules.shared import do_cmd_flags_warnings, settings
 from modules.utils import gradio, transform_settings_to_state
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request, BackgroundTasks
 from modules import shared
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 
+from typing import List, Dict, Any, Optional, AsyncIterator
+from collections import OrderedDict
+from modules.loaders import loaders_and_params
+import gradio as gr
+import traceback
 
 def signal_handler(sig, frame):
     logger.info("Received Ctrl+C. Shutting down Text generation web UI gracefully.")
@@ -194,7 +199,25 @@ class InputData(BaseModel):
     message: str
 
 
+class StatusResponse(BaseModel):
+    message: str
+
+
+class DownloadRequest(BaseModel):
+    repo_id: str
+    specific_file: str
+
+
 app = FastAPI()
+
+
+def background_download_model(repo_id: str, specific_file: str):
+    try:
+        for message in ui_model_menu.download_model_wrapper(repo_id, specific_file, gr.Progress(), False, False):
+            print("Progress:", message)
+    except Exception as e:
+        error_message = f"Error in background task: {str(e)}\n{traceback.format_exc()}"
+        print(error_message)
 
 
 @app.post("/api/v1/model/load")
@@ -209,13 +232,41 @@ async def load_model_endpoint():
         raise HTTPException(status_code=500, detail=f"Error loading model: {str(e)}")
 
 
-def generate_reply_stream(text, settings):
+@app.post("/api/v1/model/download")
+def download_model(data: DownloadRequest, background_tasks: BackgroundTasks):
     try:
-        reply_generator = text_generation._generate_reply(text, settings)
-        for reply_chunk in reply_generator:
-            yield f"{reply_chunk}\n"
+        background_tasks.add_task(background_download_model, data.repo_id, data.specific_file)
+        return {"message": f"Model {data.repo_id} started downloading"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error in Response: {str(e)}")
+        error_message = f"Error: {str(e)}\n{traceback.format_exc()}"
+        print(error_message)
+        raise HTTPException(status_code=500, detail="An error occurred while starting the model download.")
+
+
+@app.delete("/api/v1/model/unload", response_model=StatusResponse, status_code=200)
+async def unload_model_endpoint():
+    try:
+        unload_model()
+        logger.info("Model unloaded successfully")
+        return {"message": "Model unloaded successfully"}
+    
+    except Exception as e:
+        logger.error(f"Error on unloading the model: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error on unloading the model: {str(e)}")
+
+
+@app.post("/api/v1/model/reload", response_model=StatusResponse, status_code=200)
+async def reload_model_endpoint():
+    try:
+        model_name = shared.model_name
+        unload_model()
+        shared.model, shared.tokenizer = load_model(model_name)
+        logger.info("Model reloaded successfully")
+        return {"message": "Model reloaded successfully"}
+    
+    except Exception as e:
+        logger.error(f"Error on reloading the model: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error on reloading the model: {str(e)}")
 
 
 @app.post("/api/v1/chat/message")
@@ -246,6 +297,7 @@ async def send_model_message(data: InputData):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in Response: {str(e)}")
+
 
 def run_fastapi():
     import uvicorn
