@@ -47,7 +47,7 @@ from modules import (
     ui_model_menu,
     ui_notebook,
     ui_parameters,
-    ui_session,
+    session,
     utils,
     text_generation
 )
@@ -74,7 +74,7 @@ from modules.loaders import loaders_and_params
 import gradio as gr
 import traceback
 from modules.github import clone_or_pull_repository
-from models import InputData, StatusResponse, DownloadRequest, ExtensionInput, HistoryItem, ModelInput
+from models import InputData, StatusResponse, DownloadRequest, ExtensionInput, HistoryItem, ModelInput, ExtensionSettings
 
 
 def signal_handler(sig, frame):
@@ -148,7 +148,6 @@ def create_interface():
         ui_parameters.create_ui(shared.settings['preset'])  # Parameters tab
         ui_model_menu.create_ui()  # Model tab
         training.create_ui()  # Training tab
-        ui_session.create_ui()  # Session tab
 
         # Generation events
         ui_chat.create_event_handlers()
@@ -202,6 +201,8 @@ def create_interface():
 app = FastAPI()
 model_router = APIRouter()
 chat_router = APIRouter()
+session_router = APIRouter()
+
 
 def background_download_model(repo_id: str, specific_file: str):
     try:
@@ -323,8 +324,36 @@ async def send_model_message(data: InputData):
         raise HTTPException(status_code=500, detail=f"Error in Response: {str(e)}")
 
 
+@session_router.post("/extensions/install-update")
+async def install_extension(request: ExtensionInput):
+    return StreamingResponse(clone_or_pull_repository(request.github_url), media_type="text/plain")
+
+    
+@session_router.post("/extensions/apply")
+async def apply_extension_endpoint(settings: ExtensionSettings, background_tasks: BackgroundTasks):
+    try:
+        shared.args.extensions = settings.extension_names
+        bool_flags = session.get_boolean_arguments()
+        for flag in bool_flags:
+            setattr(shared.args, flag, False)
+
+        for flag in settings.active_flags:
+            setattr(shared.args, flag, True)
+            
+            if flag == 'api':
+                shared.add_extension('openai', last=True)
+
+        return {"message": "Extensions applied successfully"}
+    
+    except Exception as e:
+        error_message = f"Error: {str(e)}\n{traceback.format_exc()}"
+        print(error_message)
+        raise HTTPException(status_code=500, detail="An error occurred while applying extensions.")
+
+
 app.include_router(model_router, prefix="/api/v1/model", tags=["Model"])
 app.include_router(chat_router, prefix="/api/v1/chat", tags=["Chat"])
+app.include_router(session_router, prefix="/api/v1/session", tags=["Session"])
 
 
 def run_fastapi():
