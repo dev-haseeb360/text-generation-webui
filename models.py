@@ -149,7 +149,9 @@ class ModelInput(BaseModel):
     hqq_backend: str = "PYTORCH_COMPILE"
     cpp_runner: bool = False
 
-
 class ExtensionSettings(BaseModel):
     extension_names: List[str]
     active_flags: List[str]
+
+class ModelInput(BaseModel):
+    mode: str

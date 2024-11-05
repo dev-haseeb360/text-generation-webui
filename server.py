@@ -74,7 +74,7 @@ from modules.loaders import loaders_and_params
 import gradio as gr
 import traceback
 from modules.github import clone_or_pull_repository
-from models import InputData, StatusResponse, DownloadRequest, ExtensionInput, HistoryItem, ModelInput, ExtensionSettings
+from models import InputData, StatusResponse, DownloadRequest, ExtensionInput, HistoryItem, ModelInput, ExtensionSettings, ModelInput
 
 
 def signal_handler(sig, frame):
@@ -297,11 +297,12 @@ def save_settings(request: ModelInput):
 @chat_router.post("/message")
 async def send_model_message(data: InputData):
     try:
-        model_name = utils.get_available_models()
-        model_settings = get_model_metadata(model_name[1])
-        STATE = transform_settings_to_state(model_settings) 
-
         async def reply_streamer():
+            model_name = utils.get_available_models()
+            model_settings = get_model_metadata(model_name[1])
+            STATE = transform_settings_to_state(model_settings)
+            fix_msg = shared.settings['start_with']
+    
             try:
                 reply_generator = text_generation._generate_reply(
                     data.message, 
@@ -322,6 +323,12 @@ async def send_model_message(data: InputData):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in Response: {str(e)}")
+
+
+@chat_router.post("/start_with")
+def generate_start_with(input_data: InputData):
+    shared.settings['start_with'] = input_data.message
+    return {"message": f"The starting message is now set. Every response will start with: '{input_data.message}'"}
 
 
 @session_router.post("/extensions/install-update")
