@@ -301,8 +301,8 @@ async def send_model_message(data: InputData):
             model_name = utils.get_available_models()
             model_settings = get_model_metadata(model_name[1])
             STATE = transform_settings_to_state(model_settings)
-            fix_msg = shared.settings['start_with']
-    
+            fix_msg = shared.settings.get('start_with', '')
+
             try:
                 reply_generator = text_generation._generate_reply(
                     data.message, 
@@ -312,8 +312,13 @@ async def send_model_message(data: InputData):
                     False, 
                     False
                 )
+
+                if fix_msg:
+                    yield f"{fix_msg}"
+
                 for reply_chunk in reply_generator:
                     yield f"{reply_chunk}\n"
+
             except asyncio.CancelledError:
                 print("Streaming cancelled")
             except Exception as e:
@@ -329,6 +334,12 @@ async def send_model_message(data: InputData):
 def generate_start_with(input_data: InputData):
     shared.settings['start_with'] = input_data.message
     return {"message": f"The starting message is now set. Every response will start with: '{input_data.message}'"}
+
+
+@chat_router.post("/chat-instruct")
+def pre_instruct(input_data: InputData):
+    shared.settings['chat-instruct_command'] = input_data.message
+    return {"message": f"pre_instruction is now added to the model: '{input_data.message}'"}
 
 
 @session_router.post("/extensions/install-update")
