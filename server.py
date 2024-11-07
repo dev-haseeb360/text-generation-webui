@@ -150,7 +150,6 @@ def create_interface():
         training.create_ui()  # Training tab
 
         # Generation events
-        ui_chat.create_event_handlers()
         ui_default.create_event_handlers()
         ui_notebook.create_event_handlers()
 
